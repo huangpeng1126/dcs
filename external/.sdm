@@ -1,0 +1,14 @@
+~/system/lib/ruby/myutils.rb
+
+~/research/util/fig/fig.jar
+~/research/util/fig/lib/execrunner.rb
+~/research/util/fig/lib/runfig.rb
+
+~/research/util/tea/tea.jar
+~/research/software/trove/current/lib/trove-2.1.0.jar
+~/research/software/berkeley-parser/berkeleyParser.jar
+~/research/software/berkeley-parser/lowercase-parser
+~/research/software/berkeley-parser/wsj+qs_lc.gr.0
+
+/opt/scala/current/lib/scala-compiler.jar
+/opt/scala/current/lib/scala-library.jar

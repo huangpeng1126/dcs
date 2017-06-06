@@ -1,0 +1,195 @@
+#!/usr/bin/ruby
+
+$: << 'external'
+require 'execrunner'
+
+$hostname = `hostname`.chomp
+system "mkdir -p state/execs"
+
+require 'local' if File.exists?('local.rb')
+
+$geoPath = 'domains/dbquery/geoquery/1'
+$jobPath = 'domains/dbquery/jobqueries/1'
+def paths(base, *files); files.map {|f| base+"/"+f} end
+
+def main(className, mainJarPath)
+  prog(:lang => 'scala', :className => className,
+       :jarFiles => [mainJarPath]+Dir['external/{scala-*,fig,tea,berkeleyParser,trove*,servlet-api}.jar'],
+       :mem => $mem)
+end
+
+def geoConf(model)
+  l(
+    o('lexToName'), o('lexToSetWithName'),
+    o('generalPaths', paths($geoPath, 'geoquery.dlog', 'lexicon.dlog')),
+    sel(model,
+      l(o('dlogOptions', 'lexMode=0')), # DCS in ACL paper (match on POS)
+      l(o('dlogOptions', 'lexMode=2'), o('usePosOnlyIfNoPhraseMatches')), # DCS+ in ACL paper (POS + prototypes)
+    nil),
+    let(:mainPath, $geoPath),
+  nil)
+end
+def jobConf
+  l(
+    o('generalPaths', paths($jobPath, 'jobsquery.dlog', 'lexicon.dlog')),
+    sel(0,
+      l(o('dlogOptions', 'dataMode=rand', 'frac=0.8', 'numJobs=100', 'lexMode=0'), o('usePosOnlyIfNoMatches')), # DCS
+      l(o('dlogOptions', 'dataMode=rand', 'frac=0.8', 'numJobs=100', 'lexMode=1')), # DCS+
+      stop,
+      l(o('dlogOptions', 'dataMode=det', 'lexMode=0'), o('usePosOnlyIfNoMatches')), # DCS
+      l(o('dlogOptions', 'dataMode=det', 'lexMode=1')), # DCS+
+      stop,
+      l(o('dlogOptions', 'dataMode=rand', 'frac=0.8', 'numJobs=100', 'lexMode=0'), o('learnLexicon')),
+      o('dlogOptions', 'dataMode=rand', 'lexMode=1', 'frac=0.8', 'numJobs=200'),
+      o('dlogOptions', 'dataMode=rand', 'lexMode=1', 'frac=0.8', 'numJobs=50'),
+      o('dlogOptions', 'dataMode=rand', 'lexMode=1', 'frac=0.5', 'numJobs=100'),
+      stop,
+      o('dlogOptions', 'dataMode=det', 'lexMode=1'),
+      l(o('dlogOptions', 'dataMode=det', 'lexMode=0'), o('useSyntax')),
+    nil),
+    let(:mainPath, $jobPath),
+  nil)
+end
+
+env!(
+  sel(0,
+    l(main('dcs.NuggetLearn', 'dcs.jar'), misc('new4')),
+    l(main('dcs.NuggetLearn', 'dcs.jar'), misc('old4'), o('oldAttach')), 
+    l(main('dcs.NuggetLearn', 'external/dcs-130.jar'), misc('old')), 
+  nil),
+  requireTags,
+
+  ############################################################
+  # Generic options
+
+  # Training
+  o('model.verbose', 2),
+  selo(1, 'numIters', 1, 5),
+  sel(0,
+    l(o('updateType', 'full'), o('miniBatchSize', 'MAX')), # Batch
+    l(o('updateType', 'gradient'), selo(0, 'miniBatchSize', 1, 10), selo(nil, 'useAdaptiveGrad', false, true)), # Online
+  nil),
+  o('parser.command', 'bash external/lowercase-parser'),
+  o('parser.lowercase', true),
+  selo(1, 'useBayesianAveraging', false, true),
+  o('allowTroll'),
+  o('regularization', 0.01),
+  o('beamSize', 100),
+  # Features
+  sel(0,
+    o('features', 'pred', 'pred2', 'predarg', 'lexpred', 'lexnull'), # BEST
+    l(o('features', 'pred', 'pred2', 'predarg', 'lexpred', 'lexnull', 'syntax'), o('useSyntax', true)), # Syntax doesn't help
+    o('features', 'pred', 'pred2', 'predarg', 'lexpred', 'lexnull', 'lexpredmatch'), # Doesn't really help - more complicated
+    o('features', 'pred', 'pred2', 'predarg', 'lexpred', 'lexnull', 'skippred'), # Doesn't really help
+  nil),
+  o('generalMaxExamples', 'MAX'), o('data.permuteExamples', true), # Full dataset
+
+  # Display/debugging
+  selo(0, 'displayTypes', false, true),
+  selo(0, 'displayDens', false, true),
+  selo(0, 'displaySpans', false, true),
+  o('displayMaxSetSize', 1),
+
+  o('msPerLine', 0),
+  o('int.verbose', 0),
+  o('data.verbose', 0),
+
+  # Domains
+  sel(nil,
+    l( # GEO
+      tag('geo'), view('geo3'), geoConf(0),
+      o('parser.cachedPath', paths($geoPath, 'parses')),
+      sel(2,
+        l( # [0] Manual
+          o('trainPaths', paths($geoPath, 'impossible.dlog'))),
+        l( # [1] Debug
+          a('generalPaths', paths($geoPath, 'a.tree', 'a.dlog')), o('trainFrac', 1)),
+        l( # [2] Development (70%+30% split)
+          a('generalPaths', paths($geoPath, 'geoqueries880-train.dlog')), o('trainFrac', 0.7), o('testFrac', 0.3)),
+        l( # [3] Development - (250+250 split)
+          a('generalPaths', paths($geoPath, 'geoqueries880-train.dlog')), o('trainFrac', 250.0/600), o('testFrac', 250.0/600)),
+        l( # [4] Final test
+          o('trainPaths', paths($geoPath, 'geoqueries880-train.dlog')),
+          o('testPaths', paths($geoPath, 'geoqueries880-test.dlog'))),
+        l( # [5] Final test (UIUC data)
+          o('trainPaths', paths($geoPath, 'uiuc/train.dlog')),
+          o('testPaths', paths($geoPath, 'uiuc/test.dlog'))),
+      nil),
+    nil),
+
+    l( # JOB
+      tag('job'), view('job3'), jobConf,
+      o('parser.cachedPath', paths($jobPath, 'parses')),
+      sel(2,
+        l( # Manual
+          o('trainPaths', paths($jobPath, 'impossible.dlog'))),
+        l( # Debug
+          a('generalPaths', paths($jobPath, 'a.tree', 'a.dlog')), o('trainFrac', 1)),
+        l( # Development
+          a('generalPaths', paths($jobPath, 'jobqueries640-train.dlog')), o('trainFrac', 0.7), o('testFrac', 0.3)),
+        l( # Final test
+          o('trainPaths', paths($jobPath, 'jobqueries640-train.dlog')),
+          o('testPaths', paths($jobPath, 'jobqueries640-test.dlog'))),
+      nil),
+    nil),
+
+    # Demos (webserver)
+    def demo(tag, port)
+      # (i-1).params + i.dlog => i.params
+      # (1) Offline learn: (i-1).params + i.dlog => i.params
+      # (2) Online updates: update both i.dlog and i.params
+      # i.dlog still needs to contain all the lexical items from (i-1).dlog, etc.
+      i = 1
+      l(o('inParamsPath', lambda{|e| e[:mainPath]+"/demo#{i-1}.params"}),
+        o('outParamsPath', lambda{|e| e[:mainPath]+"/demo#{i}.params"}),
+        o('trainPaths', lambda{|e| e[:mainPath]+"/demo#{i}.dlog"}),
+        a('trainPaths', lambda{|e| e[:mainPath]+"/demo-lex.dlog"}),
+        o('outBasketsPath', lambda{|e| e[:mainPath]+"/demo#{i}.dlog"}),
+        o('testPaths', lambda{|e| e[:mainPath]+"/demo#{i}.dlog"}), # Evaluate
+
+        o('propertiesPath', "www/#{tag}.properties"),
+        o('logPath', "www/#{tag}-#{$hostname}.log"),
+        o('launchParser'), o('parser.cachedPath', 'www/parses'),
+        sel(0, l(o('startServer'), selo(1, 'server.port', 8400, port)), o('interactive')),
+        o('prettyMaxSetSize', 5),
+        o('maxSentenceLength', 80),
+        o('marginProb', 0.8), o('maxNudgeSteps', 50),
+        a('dlogOptions', 'extUnion=1', 'extAction=1'), # Extensions
+
+        o('timeout', 20),
+        o('beamSize', 200),
+        o('autoUpdate', true),
+
+        o('numIters', 1), o('updateType', 'gradient'), o('miniBatchSize', 1), # Initial learning
+      nil)
+    end,
+    l(tag('geodemo'), view('demo'), geoConf(0), demo('geo', 8400)),
+    l(tag('jobdemo'), view('demo'), jobConf, demo('job', 8401)),
+  nil),
+
+  # Variations
+  sel(0,
+    l(),
+    sel(nil, # Features [1]
+      o('features', 'pred'),
+      o('features', 'pred', 'predarg'),
+      o('features', 'pred', 'predarg', 'pred2'),
+      o('features', 'pred', 'lexpred'),
+      o('features', 'pred', 'lexpred', 'lexnull'),
+    nil),
+    l(selo(0, 'generalMaxExamples', 'MAX'), o('data.permuteExamples', true), selo(nil, 'trainFrac', 0.1, 0.3, 0.5, 0.7), o('testFrac', 0.3)), # Number of training examples [2]
+    selo(nil, 'beamSize', 1, 3, 10, 30, 100, 300), # Beam size [3]
+    selo(nil, 'regularization', 0, 0.001, 0.003, 0.01, 0.03, 0.1, 0.3), # Regularization [4]
+    o('numIters', 50), # Number of iterations [5]
+    l(o('updateType', 'gradient'), # Optimization [6]
+      sel(nil,
+        l(selo(0, 'miniBatchSize', 1, 10), selo(nil, 'stepSizeReductionPower', 0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6)), # Stochastic gradient
+        l(selo(0, 'miniBatchSize', 1, 10), o('passiveAggressive'), selo(nil, 'marginProb', 0.5, 0.7, 0.9, 0.95, 0.99), o('maxNudgeSteps', 50)), # Marginal passive aggressive
+        l(selo(0, 'miniBatchSize', 1, 10), o('useAdaptiveGrad', true)), # AdaGrad
+      nil),
+    nil),
+  nil),
+  selo(0, 'data.random', 1,2,3,4,5),
+
+  run,
+nil)
